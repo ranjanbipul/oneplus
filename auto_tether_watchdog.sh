@@ -2,13 +2,14 @@
 # auto_tether_watchdog.sh
 # Automatically toggles between Ethernet Tethering and Wi-Fi Hotspot
 # Runs as root via Magisk on OnePlus / Android 13+
+# Implements Make-Before-Break: Wi-Fi is only disabled after Ethernet is verified working.
 
 TETHER_DIR="/data/adb/tether"
 TETHERCTL="$TETHER_DIR/tetherctl"
 LOG_FILE="$TETHER_DIR/auto_tether.log"
 PID_FILE="$TETHER_DIR/watchdog.pid"
 CHECK_INTERVAL=2
-DEBOUNCE_THRESHOLD=2  # Number of consecutive cycles required to confirm state change (~4s)
+DEBOUNCE_THRESHOLD=2  # Number of consecutive cycles to confirm carrier change (~4s)
 
 log_msg() {
     msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -53,6 +54,14 @@ is_wifi_tethered() {
     dumpsys tethering 2>/dev/null | grep -qE "(wlan|softap|ap_br)[0-9]+ - TetheredState"
 }
 
+has_eth_ip() {
+    ip -4 addr show eth0 2>/dev/null | grep -q "inet "
+}
+
+has_eth_client() {
+    ip neigh show dev eth0 2>/dev/null | grep -E -q "REACHABLE|DELAY|STALE"
+}
+
 get_eth_carrier() {
     for dev in /sys/class/net/eth*; do
         if [ -f "$dev/carrier" ]; then
@@ -66,15 +75,24 @@ get_eth_carrier() {
     echo 0
 }
 
-# Initial state determination
+verify_ethernet_working() {
+    [ "$(get_eth_carrier)" = "1" ] && is_eth_tethered && has_eth_ip
+}
+
+# Initial state determination on boot
 init_carrier=$(get_eth_carrier)
 if [ "$init_carrier" = "1" ]; then
-    current_mode="ETHERNET"
-    log_msg "Initial state: Ethernet link detected UP. Ensuring Ethernet tethering is active."
-    if ! is_eth_tethered; then
+    log_msg "Initial state: Ethernet link detected UP. Ensuring Ethernet tethering is active..."
+    $TETHERCTL start-eth >/dev/null 2>&1
+    sleep 2
+    if verify_ethernet_working; then
+        current_mode="ETHERNET"
         $TETHERCTL stop-wifi >/dev/null 2>&1
-        sleep 1
-        $TETHERCTL start-eth
+        log_msg "Initial state confirmed: Ethernet tethering operational."
+    else
+        current_mode="WIFI"
+        log_msg "Initial state: Ethernet tethering failed to verify. Fallback to Wi-Fi hotspot."
+        $TETHERCTL start-wifi
     fi
 else
     current_mode="WIFI"
@@ -109,26 +127,59 @@ while true; do
         fi
 
         if [ "$debounce_count" -ge "$DEBOUNCE_THRESHOLD" ]; then
-            log_msg "State transition confirmed: switching from $current_mode to $target_mode..."
+            log_msg "Carrier change confirmed: desiring switch from $current_mode to $target_mode..."
 
             if [ "$target_mode" = "ETHERNET" ]; then
-                # Router came back online or Ethernet cable connected
-                log_msg "Action: Stopping Wi-Fi hotspot and enabling Ethernet tethering..."
-                $TETHERCTL stop-wifi >/dev/null 2>&1
-                sleep 2
+                # Router came back online / Ethernet link detected
+                log_msg "Action: Starting Ethernet tethering while KEEPING Wi-Fi hotspot active..."
                 $TETHERCTL start-eth
-                sleep 1
-                if ! is_eth_tethered; then
+
+                # Verify Ethernet becomes active with an IP address (up to 12s)
+                eth_verified=0
+                for attempt in $(seq 1 12); do
+                    sleep 1
+                    if verify_ethernet_working; then
+                        eth_verified=1
+                        break
+                    fi
+                    if [ "$attempt" -eq 5 ]; then
+                        # Retry start-eth if not yet bound
+                        $TETHERCTL start-eth
+                    fi
+                done
+
+                if [ "$eth_verified" = "1" ]; then
+                    log_msg "Ethernet tethering is UP and has IP. Waiting for router handshake..."
+                    
+                    # Wait up to 8s for client/router handshake or ARP exchange
+                    for g in $(seq 1 8); do
+                        sleep 1
+                        if has_eth_client; then
+                            log_msg "Connected router/client confirmed on Ethernet (after ${g}s)."
+                            break
+                        fi
+                    done
+                    
+                    # 2s final settling buffer
                     sleep 2
-                    $TETHERCTL start-eth
+
+                    # Final check: only disable Wi-Fi if Ethernet is STILL working
+                    if verify_ethernet_working; then
+                        log_msg "Ethernet connection fully verified. Disabling Wi-Fi hotspot now."
+                        $TETHERCTL stop-wifi >/dev/null 2>&1
+                        current_mode="ETHERNET"
+                        log_msg "Success: Seamless failover to Ethernet complete (zero blackout)."
+                    else
+                        log_msg "Warning: Ethernet link dropped during handshake. Keeping Wi-Fi hotspot ON."
+                    fi
+                else
+                    log_msg "Warning: Ethernet failed to verify within 12s. Wi-Fi hotspot remains ON for safety."
                 fi
-                current_mode="ETHERNET"
-                log_msg "Success: Switched to Ethernet tethering."
             else
-                # Router went offline or Ethernet cable disconnected
-                log_msg "Action: Stopping Ethernet tethering and enabling Wi-Fi hotspot..."
+                # Router went offline, power out, or cable disconnected
+                log_msg "Action: Router offline. Stopping Ethernet tethering and starting Wi-Fi hotspot..."
                 $TETHERCTL stop-eth >/dev/null 2>&1
-                sleep 2
+                sleep 1
                 $TETHERCTL start-wifi
                 sleep 1
                 if ! is_wifi_tethered; then
@@ -136,7 +187,7 @@ while true; do
                     $TETHERCTL start-wifi
                 fi
                 current_mode="WIFI"
-                log_msg "Success: Switched to Wi-Fi hotspot."
+                log_msg "Success: Wi-Fi hotspot is now active."
             fi
 
             debounce_count=0
@@ -151,9 +202,15 @@ while true; do
         if [ "$health_check_counter" -ge 5 ]; then
             health_check_counter=0
             if [ "$current_mode" = "ETHERNET" ]; then
-                if ! is_eth_tethered; then
-                    log_msg "Health check: Ethernet tethering dropped unexpectedly, re-enabling..."
-                    $TETHERCTL start-eth
+                if ! verify_ethernet_working; then
+                    if [ "$(get_eth_carrier)" = "1" ]; then
+                        log_msg "Health check: Ethernet tethering lost, attempting recovery..."
+                        $TETHERCTL start-eth
+                    else
+                        log_msg "Health check: Ethernet link is down, falling back to Wi-Fi hotspot..."
+                        $TETHERCTL start-wifi
+                        current_mode="WIFI"
+                    fi
                 fi
             elif [ "$current_mode" = "WIFI" ]; then
                 if ! is_wifi_tethered; then

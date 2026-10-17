@@ -26,11 +26,21 @@ This system provides:
      (Router is powered ON)            (Router is powered OFF)
                |                                 |
                v                                 v
-   +-----------------------+         +-----------------------+
-   | 1. Stop Wi-Fi Hotspot |         | 1. Stop Eth Tethering |
-   | 2. Start Eth Tether   |         | 2. Start Wi-Fi Hotspot|
-   +-----------------------+         +-----------------------+
+   +-------------------------------+   +-----------------------+
+   | 1. KEEP Wi-Fi Hotspot active  |   | 1. Stop Eth Tethering |
+   | 2. Start Ethernet Tethering   |   | 2. Start Wi-Fi Hotspot|
+   | 3. VERIFY Eth IP & Handshake  |   +-----------------------+
+   | 4. ONLY THEN stop Wi-Fi AP!   |
+   +-------------------------------+
 ```
+
+### Make-Before-Break Seamless Handover
+When power returns to your router, client devices connected to the phone's Wi-Fi hotspot are **not** disconnected immediately:
+1. **Wi-Fi hotspot remains fully active** while Ethernet tethering is initialized in the background.
+2. The watchdog verifies that `eth0` has successfully entered Android's `TetheredState` and has been assigned its IPv4 subnet (`10.47.219.x`).
+3. It waits for the router to complete its WAN boot cycle and ARP handshake (up to 8–10 seconds).
+4. **Only after Ethernet is 100% verified to be working** does the phone turn off the Wi-Fi hotspot, giving you zero blackout.
+5. If the router fails to negotiate or the link drops, **Wi-Fi hotspot stays on** as the fail-safe.
 
 ### Components Deployed
 | Component | Device Path | Purpose |
