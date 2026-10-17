@@ -115,16 +115,26 @@ while true; do
                 # Router came back online or Ethernet cable connected
                 log_msg "Action: Stopping Wi-Fi hotspot and enabling Ethernet tethering..."
                 $TETHERCTL stop-wifi >/dev/null 2>&1
-                sleep 1
+                sleep 2
                 $TETHERCTL start-eth
+                sleep 1
+                if ! is_eth_tethered; then
+                    sleep 2
+                    $TETHERCTL start-eth
+                fi
                 current_mode="ETHERNET"
                 log_msg "Success: Switched to Ethernet tethering."
             else
                 # Router went offline or Ethernet cable disconnected
                 log_msg "Action: Stopping Ethernet tethering and enabling Wi-Fi hotspot..."
                 $TETHERCTL stop-eth >/dev/null 2>&1
-                sleep 1
+                sleep 2
                 $TETHERCTL start-wifi
+                sleep 1
+                if ! is_wifi_tethered; then
+                    sleep 2
+                    $TETHERCTL start-wifi
+                fi
                 current_mode="WIFI"
                 log_msg "Success: Switched to Wi-Fi hotspot."
             fi
