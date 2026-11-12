@@ -103,3 +103,4 @@ case "$cmd" in
         echo "  log            View recent activity log"
         ;;
 esac
+

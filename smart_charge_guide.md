@@ -49,6 +49,8 @@ Run directly from `adb shell` as root (`su`):
 # 1. Check live battery, temperature, voltage, and daemon status
 /data/adb/smart_charge/chargectl status
 
+adb shell "su -c '/data/adb/smart_charge/chargectl on'"
+
 # 2. View recent state transition logs
 /data/adb/smart_charge/chargectl log
 
@@ -89,3 +91,4 @@ From your Mac workspace:
 cd /Users/bipul/dspace/oneplus
 ./install_smart_charge.sh
 ```
+
