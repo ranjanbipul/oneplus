@@ -1,0 +1,6 @@
+id=callbridge
+name=CallBridge Gateway
+version=0.1-spike
+versionCode=1
+author=bipul
+description=Privileged gateway that bridges cellular calls, call log and SMS to a companion app on the LAN.
