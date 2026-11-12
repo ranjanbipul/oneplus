@@ -23,7 +23,7 @@ echo "Installed on $DEVICE"
 ARGS=()
 [[ -n "${KEY:-}" ]] && ARGS+=(-key "$KEY")
 [[ -n "${HOST:-}" ]] && ARGS+=(-host "$HOST")
-if xcrun devicectl device process launch --terminate-existing --device "$DEVICE" com.imbine.callbridge.ios "${ARGS[@]+"${ARGS[@]}"}" >/dev/null 2>&1; then
+if xcrun devicectl device process launch --terminate-existing --device "$DEVICE" com.imbine.callbridge.ios ${ARGS:+-- "${ARGS[@]}"} >/dev/null 2>&1; then
     echo "Launched"
 else
     echo "Could not launch it (is the iPhone locked?). Unlock it and run this again to pass KEY/HOST, or open CallBridge yourself."
