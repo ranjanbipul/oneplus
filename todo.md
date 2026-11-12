@@ -1,0 +1,1 @@
+* [] Static ip assignment, might require 

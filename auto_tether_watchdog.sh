@@ -34,6 +34,9 @@ if [ -f "$PID_FILE" ]; then
 fi
 echo $$ > "$PID_FILE"
 
+# Protect this process from Android OOM killer (lower = less likely to be killed)
+echo -950 > "/proc/$$/oom_score_adj" 2>/dev/null || true
+
 # Wait for boot completion
 while [ "$(getprop sys.boot_completed)" != "1" ]; do
     sleep 2
