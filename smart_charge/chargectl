@@ -1,0 +1,105 @@
+#!/system/bin/sh
+# chargectl - Smart Battery CLI Management Tool
+# Direct control and monitoring of charging hysteresis
+
+DIR="/data/adb/smart_charge"
+CONF="$DIR/smart_charge.conf"
+LOG_FILE="$DIR/smart_charge.log"
+PID_FILE="$DIR/smart_charge.pid"
+
+NODE_SUSPEND="/sys/class/power_supply/battery/input_suspend"
+NODE_CAPACITY="/sys/class/power_supply/battery/capacity"
+NODE_USB_ONLINE="/sys/class/power_supply/usb/online"
+NODE_TEMP="/sys/class/power_supply/battery/temp"
+NODE_VOLTAGE="/sys/class/power_supply/battery/voltage_now"
+NODE_CURRENT="/sys/class/power_supply/battery/current_now"
+
+cmd="$1"
+
+case "$cmd" in
+    status|"")
+        cap=$(cat "$NODE_CAPACITY" 2>/dev/null || echo "N/A")
+        usb=$(cat "$NODE_USB_ONLINE" 2>/dev/null || echo "0")
+        suspend=$(cat "$NODE_SUSPEND" 2>/dev/null || echo "0")
+        raw_temp=$(cat "$NODE_TEMP" 2>/dev/null || echo "0")
+        temp_c=$(awk "BEGIN {printf \"%.1f\", $raw_temp / 10}")
+        raw_volt=$(cat "$NODE_VOLTAGE" 2>/dev/null || echo "0")
+        volt_v=$(awk "BEGIN {printf \"%.3f\", $raw_volt / 1000000}")
+        current_ma=$(cat "$NODE_CURRENT" 2>/dev/null || echo "0")
+
+        daemon_status="STOPPED"
+        if [ -f "$PID_FILE" ]; then
+            dpid=$(cat "$PID_FILE" 2>/dev/null)
+            if [ -n "$dpid" ] && [ -d "/proc/$dpid" ]; then
+                daemon_status="RUNNING (PID $dpid)"
+            fi
+        fi
+
+        echo "=========================================="
+        echo "       SmartCharge Battery Status         "
+        echo "=========================================="
+        echo "  Battery Level   : $cap%"
+        echo "  Battery Voltage : ${volt_v}V"
+        echo "  Battery Current : ${current_ma} mA"
+        echo "  Battery Temp    : ${temp_c}°C"
+        if [ "$usb" = "1" ]; then
+            echo "  USB Power Source: CONNECTED"
+        else
+            echo "  USB Power Source: DISCONNECTED (Power Cut / Unplugged)"
+        fi
+
+        if [ "$suspend" = "1" ]; then
+            echo "  Charging State  : SUSPENDED (Idle / Disconnecting from battery)"
+        else
+            echo "  Charging State  : ACTIVE (Charging allowed)"
+        fi
+
+        echo "  Daemon Service  : $daemon_status"
+
+        if [ -f "$CONF" ]; then
+            . "$CONF"
+            echo "  Configured Range: Charge at <= ${CHARGE_START_PERCENT}% | Stop at >= ${CHARGE_STOP_PERCENT}%"
+        fi
+        echo "=========================================="
+        ;;
+
+    on|start)
+        echo 0 > "$NODE_SUSPEND"
+        echo "Charging FORCED ON (input_suspend=0)."
+        ;;
+
+    off|stop)
+        echo 1 > "$NODE_SUSPEND"
+        echo "Charging FORCED OFF (input_suspend=1)."
+        ;;
+
+    limits)
+        start_val="$2"
+        stop_val="$3"
+        if [ -z "$start_val" ] || [ -z "$stop_val" ]; then
+            echo "Usage: chargectl limits <start_percent> <stop_percent>"
+            echo "Example: chargectl limits 50 85"
+            exit 1
+        fi
+        sed -i "s/^CHARGE_START_PERCENT=.*/CHARGE_START_PERCENT=$start_val/" "$CONF"
+        sed -i "s/^CHARGE_STOP_PERCENT=.*/CHARGE_STOP_PERCENT=$stop_val/" "$CONF"
+        echo "Updated limits: Start=$start_val% | Stop=$stop_val%"
+        ;;
+
+    log)
+        if [ -f "$LOG_FILE" ]; then
+            tail -n 25 "$LOG_FILE"
+        else
+            echo "No log file found at $LOG_FILE"
+        fi
+        ;;
+
+    *)
+        echo "Usage: chargectl [status|on|off|limits|log]"
+        echo "  status         Show detailed battery and charging state"
+        echo "  on             Force charging ON immediately"
+        echo "  off            Force charging OFF (suspend input)"
+        echo "  limits <s <e>  Change thresholds (e.g. chargectl limits 50 85)"
+        echo "  log            View recent activity log"
+        ;;
+esac
