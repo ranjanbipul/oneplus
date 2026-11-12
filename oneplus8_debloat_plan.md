@@ -10,6 +10,94 @@
 
 ---
 
+## 📜 Execution Log (Categories 1–3 Executed)
+**Execution Date:** 2026-11-12 10:51 IST  
+**Target Device:** OnePlus 8 (IN2011)  
+**Total Packages Disabled:** 50 packages  
+
+### Disabled in this run:
+- **Category 1 (Google Telemetry & Ads - 8 packages):**
+  - `com.google.android.adservices.api`
+  - `com.google.mainline.adservices`
+  - `com.google.mainline.telemetry`
+  - `com.google.android.ondevicepersonalization.services`
+  - `com.google.android.federatedcompute`
+  - `com.google.android.feedback`
+  - `com.google.android.partnersetup`
+  - `com.google.android.onetimeinitializer`
+
+- **Category 2 (OPlus Telemetry, Cloud, Store & Bloat - 23 packages):**
+  - `com.oplus.statistics.rom`
+  - `com.oplus.logkit`
+  - `com.oplus.onetrace`
+  - `com.oplus.qualityprotect`
+  - `com.oplus.crashbox`
+  - `com.oplus.lfeh`
+  - `com.oplus.sau`
+  - `com.oplus.sauhelper`
+  - `com.oplus.themestore`
+  - `com.oplus.omoji`
+  - `com.oplus.games`
+  - `com.oplus.ocloud`
+  - `com.oplus.pay`
+  - `com.oneplus.membership`
+  - `com.oplus.appplatform`
+  - `com.heytap.cloud`
+  - `com.heytap.mcs`
+  - `com.heytap.colorfulengine`
+  - `com.heytap.accessory`
+  - `com.oppo.quicksearchbox`
+  - `com.coloros.operationManual`
+  - `com.coloros.systemclone`
+  - `com.coloros.childrenspace`
+
+- **Category 3 (Qualcomm Extras & Engineering Tools - 19 packages):**
+  - `com.oplus.wifitest`
+  - `com.oplus.bttestmode`
+  - `com.oplus.engineercamera`
+  - `com.oplus.engineermode`
+  - `com.oplus.engineernetwork`
+  - `com.qualcomm.qti.modemtestmode`
+  - `com.qualcomm.qti.devicestatisticsservice`
+  - `com.qualcomm.qti.xrcb`
+  - `com.qualcomm.qti.xrvd.service`
+  - `com.qualcomm.embms`
+  - `com.android.cts.ctsshim`
+  - `com.android.cts.priv.ctsshim`
+  - `com.android.egg`
+  - `com.android.traceur`
+  - `com.android.dreams.basic`
+  - `com.wapi.wapicertmanage`
+  - `com.ses.entitlement.o2`
+  - `com.redteamobile.roaming`
+  - `com.mediatek.omacp`
+
+---
+
+## ⚡ Exact Step-by-Step Revert Commands
+
+### Option A: Revert ONLY the packages disabled in this session
+Run from terminal:
+```bash
+while read -r pkg; do
+  adb shell "pm enable $pkg"
+done < /Users/bipul/dspace/oneplus/debloated_packages.log
+```
+
+### Option B: Revert a specific package (e.g. OPlus Theme Store)
+```bash
+adb shell "pm enable com.oplus.themestore"
+```
+
+### Option C: Complete restore of all disabled packages on the device
+```bash
+adb shell "pm list packages -d" | sed 's/package://' | while read -r pkg; do
+  adb shell "pm enable $pkg"
+done
+```
+
+---
+
 ## How to Disable & Re-enable (Revert)
 
 ### Disable a package
