@@ -1,11 +1,14 @@
-# CallBridge: use the OnePlus 8's SIM from another Android device or a Mac
+# CallBridge: use the OnePlus 8's SIM from another Android device, a Mac or an iPhone
 
-CallBridge lets a second, unrooted Android device or a Mac on the OnePlus 8's network make and
-receive calls through the OnePlus 8's SIM, with two-way audio, call log and SMS.
+CallBridge lets a second, unrooted Android device, a Mac or an iPhone on the OnePlus 8's network
+make and receive calls through the OnePlus 8's SIM, with two-way audio, call log and SMS.
 
 - **Gateway** (`callbridge/gateway`): privileged app on the rooted OnePlus 8, installed as a Magisk module.
 - **Client** (`callbridge/client`): normal APK for the second device.
-- **Mac client** (`callbridge/macos`): native SwiftUI app (macOS 14+, Intel or Apple silicon).
+- **Apple clients** (`callbridge/apple`): a Swift package with the shared core (`CallBridgeCore`:
+  protocol, gateway link, call audio), the Mac app (`CallBridgeMac`, macOS 14+) and the iPhone
+  app (`ios/CallBridge.xcodeproj`, iOS 17+). Bundle ids are `com.imbine.callbridge.mac` and
+  `com.imbine.callbridge.ios`.
 - **Protocol** (`callbridge/proto`): TCP 8765 for control, UDP 8766 for audio (16 kHz mono PCM). LAN only.
 
 ## Install the gateway (OnePlus 8)
@@ -47,10 +50,10 @@ ring reliably, and open the app once after each reboot of that device.
 Needs Xcode (or the Command Line Tools) on the Mac:
 
 ```bash
-callbridge/macos/build_app.sh --install
+callbridge/apple/build_mac_app.sh --install
 ```
 
-This builds `callbridge/macos/build/CallBridge.app` and copies it to `/Applications`. Open it,
+This builds `callbridge/apple/build/CallBridge.app` and copies it to `/Applications`. Open it,
 allow the microphone and notifications, then in **Settings** enter the pairing key and click
 **Save & Reconnect**. As on Android, leave the address empty when the Mac uses the OnePlus 8's
 hotspot or USB tether.
@@ -66,9 +69,57 @@ hotspot or USB tether.
   the microphone permission across rebuilds. With only an ad-hoc signature it asks again after
   every build. Set `CODESIGN_IDENTITY` to choose another identity.
 
+## Install the iPhone client
+
+Needs Xcode signed in to the Apple developer account in the project (team `3HQ9BLYTF3`), and the
+iPhone paired with the Mac in Developer Mode. With the iPhone unlocked:
+
+```bash
+KEY=<pairing key> callbridge/apple/build_ios_app.sh --install
+```
+
+This builds, installs and launches the app, and hands it the pairing key (it can also be typed in
+the app's **Settings**). Allow the microphone and notifications when asked. Leave the address
+empty when the iPhone is on the OnePlus 8's hotspot. Development builds expire with their
+provisioning profile (about a year with a paid account); run the script again to renew.
+
+Calls use the iPhone's own call screen (CallKit): they ring on the lock screen, work with
+AirPods and car Bluetooth, and appear in the Phone app's Recents. While the app is open it talks
+to the gateway directly. In the background iOS suspends it, so the gateway wakes it with Apple
+push instead:
+
+- **Incoming call:** VoIP push. iOS relaunches the app straight into the incoming-call screen;
+  answering connects it to the gateway (under a second on the hotspot) and the call is bridged.
+- **New SMS:** a normal notification.
+
+The gateway sends these over the OnePlus 8's mobile data, so it needs an APNs key from the Apple
+developer account (Certificates, IDs & Profiles > Keys > +, tick Apple Push Notifications
+service, download `AuthKey_<KEYID>.p8`; it can be downloaded only once). Install it on the
+gateway:
+
+```bash
+./install_callbridge.sh apns ~/Downloads/AuthKey_<KEYID>.p8 3HQ9BLYTF3
+```
+
+The app's **Settings** shows **Ringing in background: On** once the gateway has the key and the
+app has registered. To test without a real call (with the iPhone app closed):
+
+```bash
+adb -s <phone>:8855 shell su -c 'am start-foreground-service -n com.antigravity.callbridge.gateway/.BridgeService --es test_push sms'
+```
+
+```bash
+adb -s <phone>:8855 shell su -c 'am start-foreground-service -n com.antigravity.callbridge.gateway/.BridgeService --es test_push call'
+```
+
+The test call shows the incoming-call screen for a moment and then ends by itself.
+
+Local Push Connectivity (pushes over the hotspot without internet) would avoid the mobile-data
+dependency, but Apple grants that entitlement only on request, so the app uses VoIP push.
+
 ## Several clients at once
 
-Any number of paired clients (Android and Mac) can be connected at the same time. All of them get
+Any number of paired clients (Android, Mac and iPhone) can be connected at the same time. All of them get
 call state, call log and SMS updates, and an incoming call rings on all of them. The client that
 answers or dials owns the call and is the only one that gets its audio; the others show the call
 as being on another device and can still hang it up. A call cannot be moved to another client
@@ -106,6 +157,8 @@ Verified on IN2011, OxygenOS 13.1, Jio SIM in slot 2:
 - If the client stays off the network for more than 20 seconds during a call it is on, the gateway hangs the call up.
 - Calls answered on the OnePlus 8 itself are not bridged.
 - A call stays on the client that answered or placed it; it cannot be handed to another client.
+- iPhone ringing in the background needs mobile data on the OnePlus 8 (Apple push) and the APNs
+  key on the gateway. Without them the iPhone rings only while CallBridge is open.
 
 ## Uninstall
 

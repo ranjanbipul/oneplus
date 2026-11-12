@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import CallBridgeCore
 import SwiftUI
 
 @main
@@ -19,6 +20,7 @@ struct CallBridgeApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        Config.migrate()
         Notify.setup()
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             if !granted { ui { $0.notice = "Microphone access denied: allow it in System Settings > Privacy & Security" } }

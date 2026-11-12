@@ -2,28 +2,28 @@ import CryptoKit
 import Foundation
 
 /// CallBridge wire protocol; mirrors callbridge/proto/.../Proto.kt.
-enum Proto {
-    static let controlPort: UInt16 = 8765
-    static let audioPort: UInt16 = 8766
-    static let sampleRate = 16000
-    static let frameSamples = sampleRate / 50 // 20 ms
-    static let audioHeader = 8
-    static let audioPacket = audioHeader + frameSamples * 2
-    static let maxLine = 256 * 1024
+public enum Proto {
+    public static let controlPort: UInt16 = 8765
+    public static let audioPort: UInt16 = 8766
+    public static let sampleRate = 16000
+    public static let frameSamples = sampleRate / 50 // 20 ms
+    public static let audioHeader = 8
+    public static let audioPacket = audioHeader + frameSamples * 2
+    public static let maxLine = 256 * 1024
 
-    static let idle = "idle"
-    static let ringing = "ringing"
-    static let dialing = "dialing"
-    static let active = "active"
+    public static let idle = "idle"
+    public static let ringing = "ringing"
+    public static let dialing = "dialing"
+    public static let active = "active"
 
-    static func msg(_ type: String, _ fields: [String: Any] = [:]) -> [String: Any] {
+    public static func msg(_ type: String, _ fields: [String: Any] = [:]) -> [String: Any] {
         var m = fields
         m["t"] = type
         return m
     }
 
     /// [token:int32 le][seq:int32 le][frameSamples x int16 le]
-    static func packAudio(token: Int32, seq: Int32, pcm: UnsafeBufferPointer<Int16>) -> [UInt8] {
+    public static func packAudio(token: Int32, seq: Int32, pcm: UnsafeBufferPointer<Int16>) -> [UInt8] {
         var out = [UInt8](repeating: 0, count: audioPacket)
         out.withUnsafeMutableBytes { raw in
             raw.storeBytes(of: token.littleEndian, toByteOffset: 0, as: Int32.self)
@@ -36,7 +36,7 @@ enum Proto {
     }
 
     /// Returns the sequence number, or nil if the packet is malformed or the token is wrong.
-    static func unpackAudio(_ data: UnsafeRawBufferPointer, token: Int32, into pcm: inout [Int16]) -> Int32? {
+    public static func unpackAudio(_ data: UnsafeRawBufferPointer, token: Int32, into pcm: inout [Int16]) -> Int32? {
         guard data.count == audioPacket else { return nil }
         let t = Int32(littleEndian: data.loadUnaligned(fromByteOffset: 0, as: Int32.self))
         guard t == token else { return nil }
@@ -48,15 +48,15 @@ enum Proto {
     }
 }
 
-enum Auth {
-    static func nonce() -> String {
+public enum Auth {
+    public static func nonce() -> String {
         var bytes = [UInt8](repeating: 0, count: 16)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
     /// HMAC-SHA256 over each part followed by a NUL byte, keyed by the trimmed, upper-cased key.
-    static func hmac(_ key: String, _ parts: String...) -> String {
+    public static func hmac(_ key: String, _ parts: String...) -> String {
         let k = SymmetricKey(data: Data(key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().utf8))
         var h = HMAC<SHA256>(key: k)
         for p in parts {
@@ -67,7 +67,7 @@ enum Auth {
     }
 
     /// Constant-time string comparison.
-    static func same(_ a: String, _ b: String) -> Bool {
+    public static func same(_ a: String, _ b: String) -> Bool {
         let x = Array(a.utf8), y = Array(b.utf8)
         guard x.count == y.count else { return false }
         var diff: UInt8 = 0

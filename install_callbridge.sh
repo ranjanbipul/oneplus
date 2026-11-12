@@ -6,6 +6,9 @@
 #   ./install_callbridge.sh finish   after the reboot: grant permissions, start the gateway, show the pairing key
 #   ./install_callbridge.sh update   push a new gateway APK without a reboot (only when the
 #                                    privileged permission list has not changed)
+#   ./install_callbridge.sh apns AuthKey_KEYID.p8 TEAMID
+#                                    give the gateway an APNs key so it can ring iPhone clients
+#                                    whose app is in the background
 #
 # The phone's adb address is the Mac's default gateway (it changes on every phone reboot);
 # override with DEVICE=ip:port.
@@ -52,6 +55,27 @@ case "${1:-}" in
         # privileged permissions; drop it so the module version is the one that runs.
         "${ADB[@]}" shell "su -c 'pm uninstall-system-updates $PKG >/dev/null 2>&1'" || true
         grant_and_start
+        ;;
+    apns)
+        KEY="${2:?usage: $0 apns AuthKey_KEYID.p8 TEAMID}"
+        TEAM="${3:?usage: $0 apns AuthKey_KEYID.p8 TEAMID}"
+        KEYID="${KEYID:-$(basename "$KEY" | sed -n 's/^AuthKey_\([A-Z0-9]*\)\.p8$/\1/p')}"
+        [[ -n "$KEYID" ]] || { echo "Cannot read the key id from the file name; set KEYID=..."; exit 1; }
+        DIR=/data/media/0/Android/data/$PKG/files/apns
+        printf '{"keyId":"%s","teamId":"%s"}' "$KEYID" "$TEAM" > /tmp/callbridge-apns.json
+        "${ADB[@]}" push "$KEY" /data/local/tmp/cb-key.p8 >/dev/null
+        "${ADB[@]}" push /tmp/callbridge-apns.json /data/local/tmp/cb-apns.json >/dev/null
+        rm -f /tmp/callbridge-apns.json
+        # Same owner/group as the app's other external files, so the app can read them.
+        "${ADB[@]}" shell "su -c '
+            files=\$(dirname $DIR); grp=\$(stat -c %g \$files)
+            mkdir -p $DIR
+            mv /data/local/tmp/cb-key.p8 $DIR/key.p8
+            mv /data/local/tmp/cb-apns.json $DIR/config.json
+            chown -R 1023:\$grp $DIR; chmod 2770 $DIR; chmod 660 $DIR/key.p8 $DIR/config.json
+            ls -ln $DIR
+        '"
+        echo "APNs key $KEYID (team $TEAM) installed. iPhone clients pick it up when they next connect."
         ;;
     update)
         ./callbridge/build_module.sh "$DEVICE"

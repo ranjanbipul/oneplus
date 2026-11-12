@@ -1,4 +1,5 @@
 import AppKit
+import CallBridgeCore
 import AVFoundation
 import SwiftUI
 
@@ -289,19 +290,6 @@ struct RecentsView: View {
 
 // MARK: messages
 
-struct SmsThread: Identifiable, Hashable {
-    let key: String
-    let addr: String
-    let items: [SmsItem] // newest first
-    var id: String { key }
-}
-
-/// Groups numbers that differ only in country prefix or formatting.
-func threadKey(_ addr: String) -> String {
-    let digits = addr.filter(\.isNumber)
-    return digits.count >= 10 ? String(digits.suffix(10)) : (digits.isEmpty ? addr : digits)
-}
-
 struct MessagesView: View {
     @Environment(AppState.self) private var s
     @State private var selection: String?
@@ -309,16 +297,7 @@ struct MessagesView: View {
     /// Set by other screens to jump to a conversation.
     static var openThread: String?
 
-    var threads: [SmsThread] {
-        var order = [String]()
-        var groups = [String: [SmsItem]]()
-        for m in s.sms.sorted(by: { $0.ts > $1.ts }) {
-            let k = threadKey(m.addr)
-            if groups[k] == nil { order.append(k) }
-            groups[k, default: []].append(m)
-        }
-        return order.map { SmsThread(key: $0, addr: groups[$0]!.first!.addr, items: groups[$0]!) }
-    }
+    var threads: [SmsThread] { SmsThread.group(s.sms) }
 
     var body: some View {
         NavigationSplitView {
@@ -342,7 +321,7 @@ struct MessagesView: View {
                 ComposeView(initialTo: pendingTo) { to in
                     pendingTo = ""
                     composing = false
-                    selection = threadKey(to)
+                    selection = SmsThread.key(to)
                 }
             } else if let sel = selection, let t = threads.first(where: { $0.key == sel }) {
                 ThreadView(thread: t)
@@ -354,7 +333,7 @@ struct MessagesView: View {
         }
         .onAppear {
             if let n = Self.openThread {
-                selection = threadKey(n)
+                selection = SmsThread.key(n)
                 Self.openThread = nil
                 if !threads.contains(where: { $0.key == selection }) {
                     composing = true
@@ -543,13 +522,3 @@ struct MenuBarContent: View {
     }
 }
 
-// MARK: helpers
-
-func shortDate(_ ms: Int64) -> String {
-    let d = Date(timeIntervalSince1970: Double(ms) / 1000)
-    let cal = Calendar.current
-    if cal.isDateInToday(d) { return d.formatted(date: .omitted, time: .shortened) }
-    if cal.isDateInYesterday(d) { return "Yesterday" }
-    if let days = cal.dateComponents([.day], from: d, to: .now).day, days < 7 { return d.formatted(.dateTime.weekday(.wide)) }
-    return d.formatted(date: .numeric, time: .omitted)
-}

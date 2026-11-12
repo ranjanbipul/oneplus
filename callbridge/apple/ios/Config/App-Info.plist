@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>voip</string>
+	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>CallBridge sends your voice to the person you are calling through the OnePlus 8.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>CallBridge connects to the CallBridge gateway on the OnePlus 8 over your local network.</string>
+</dict>
+</plist>

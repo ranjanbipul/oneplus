@@ -2,11 +2,13 @@ import AVFoundation
 import Foundation
 import os
 
-/// Call audio: microphone -> gateway and gateway -> speakers, 16 kHz mono PCM16 over UDP.
-/// Voice processing (echo cancellation, noise suppression, AGC) is on, so the Mac's own
-/// speakers and microphone can be used without the far party hearing themselves.
-final class AudioEngine {
-    static let shared = AudioEngine()
+/// Call audio: microphone -> gateway and gateway -> speaker, 16 kHz mono PCM16 over UDP.
+/// Voice processing (echo cancellation, noise suppression, AGC) is on, so a device's own
+/// speaker and microphone can be used without the far party hearing themselves.
+/// Microphone permission and (on iOS) the audio session are the caller's job.
+public final class CallAudio: @unchecked Sendable {
+    /// Called on the main thread with a user-facing message when audio cannot run.
+    public var onError: ((String) -> Void)?
 
     private var engine: AVAudioEngine?
     private var source: AVAudioSourceNode?
@@ -19,9 +21,9 @@ final class AudioEngine {
     private var configObserver: NSObjectProtocol?
     private let state = OSAllocatedUnfairLock(initialState: Session?.none)
 
-    /// Mutable from the main thread; read on the audio tap thread.
+    /// Settable from any thread; read on the audio tap thread.
     private let mutedFlag = OSAllocatedUnfairLock(initialState: false)
-    var muted: Bool {
+    public var muted: Bool {
         get { mutedFlag.withLock { $0 } }
         set { mutedFlag.withLock { $0 = newValue } }
     }
@@ -33,37 +35,23 @@ final class AudioEngine {
         let id = UUID()
     }
 
-    var running: Bool { state.withLock { $0 != nil } }
+    public var running: Bool { state.withLock { $0 != nil } }
 
     /// Engine setup can block (device negotiation, permission checks), so it never runs on
-    /// the main thread: everything that touches the engine runs on this queue.
+    /// the caller's thread: everything that touches the engine runs on this queue.
     private let queue = DispatchQueue(label: "callbridge.audio", qos: .userInteractive)
 
-    /// Main thread only. Starts call audio once microphone access is settled.
-    func start() {
-        guard !running else { return }
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            begin()
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
-                DispatchQueue.main.async {
-                    guard AppState.shared.call.bridged, AppState.shared.call.state == Proto.active else { return }
-                    if granted { self.begin() } else { AppState.shared.notice = Self.deniedText }
-                }
-            }
-        default:
-            AppState.shared.notice = Self.deniedText
+    public init() {}
+
+    /// Starts streaming to and from the gateway. No-op if already running.
+    public func start(udp: UdpSocket, ip: String, token: Int32) {
+        let session = Session(udp: udp, ip: ip, token: token)
+        let started = state.withLock { s -> Bool in
+            if s != nil { return false }
+            s = session
+            return true
         }
-    }
-
-    private static let deniedText = "Microphone access is off: allow CallBridge in System Settings > Privacy & Security > Microphone"
-
-    private func begin() {
-        guard !running, let udp = Link.shared.udp, let ip = Link.shared.gatewayIP else { return }
-        let session = Session(udp: udp, ip: ip, token: Link.shared.token)
-        state.withLock { $0 = session }
-        Power.inCall(true)
+        guard started else { return }
         let t = Thread { [weak self] in self?.receiveLoop(session) }
         t.name = "callbridge.audio.rx"
         t.qualityOfService = .userInteractive
@@ -77,8 +65,7 @@ final class AudioEngine {
                 try startEngine()
             } catch {
                 NSLog("CallBridge: audio start failed: \(error)")
-                let msg = error.localizedDescription
-                ui { $0.notice = "Audio failed: \(msg)" }
+                report("Audio failed: \(error.localizedDescription)")
                 return
             }
             if configObserver == nil {
@@ -92,19 +79,27 @@ final class AudioEngine {
         }
     }
 
-    /// Main thread only.
-    func stop() {
+    public func stop() {
         let was = state.withLock { s -> Bool in
             defer { s = nil }
             return s != nil
         }
         guard was else { return }
-        Power.inCall(false)
         queue.async { [self] in
             if let o = configObserver { NotificationCenter.default.removeObserver(o) }
             configObserver = nil
             stopEngine()
         }
+    }
+
+    /// Blocks until the engine is torn down (use before the UDP socket closes).
+    public func stopAndWait() {
+        stop()
+        queue.sync {}
+    }
+
+    private func report(_ msg: String) {
+        DispatchQueue.main.async { self.onError?(msg) }
     }
 
     // MARK: engine
@@ -193,8 +188,7 @@ final class AudioEngine {
                 try e.start()
             }
         } catch {
-            let msg = error.localizedDescription
-            ui { $0.notice = "Audio failed after device change: \(msg)" }
+            report("Audio failed after device change: \(error.localizedDescription)")
         }
     }
 

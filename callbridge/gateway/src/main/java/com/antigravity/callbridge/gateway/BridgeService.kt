@@ -116,6 +116,13 @@ class BridgeService : Service() {
                 exec.execute { session?.applyMute(it) }
             }
         }
+        // adb: am start-foreground-service -n <pkg>/.BridgeService --es test_push sms|call
+        // Sends a test push to registered iPhones that are not connected. A test ring shows
+        // the incoming-call screen briefly; the app ends it once it sees no call is ringing.
+        when (intent?.getStringExtra("test_push")) {
+            "sms" -> exec.execute { Apns.sms(this, "CallBridge", "Test notification from the gateway", connectedIds()) }
+            "call" -> exec.execute { Apns.ring(this, "CallBridge test", connectedIds()) }
+        }
         return START_STICKY
     }
 
@@ -253,6 +260,15 @@ class BridgeService : Service() {
             "reject", "hangup" -> CallHub.hangup()
             "dtmf" -> m.optString("digit").firstOrNull()?.let { if (it in "0123456789*#") CallHub.dtmf(it) }
             "calllog_get" -> send(c, Proto.msg("calllog").put("items", CallLogSync.query(this, m.optInt("limit", 100).coerceIn(1, 500))))
+            "push_register" -> {
+                if (c.id.isEmpty()) return
+                Apns.register(
+                    this,
+                    Apns.Device(c.id, m.optString("voip"), m.optString("alert"), m.optString("topic"), m.optBoolean("sandbox"))
+                )
+                val problem = Apns.problem(this)
+                send(c, Proto.msg("push_status").put("ok", problem == null).put("msg", problem ?: ""))
+            }
             "sms_get" -> send(c, Proto.msg("sms").put("items", SmsBridge.query(this, m.optInt("limit", 100).coerceIn(1, 500))))
             "sms_send" -> {
                 val reply = Proto.msg("sms_sent").put("id", m.optString("id"))
@@ -285,12 +301,23 @@ class BridgeService : Service() {
     private fun broadcast(build: (Client) -> JSONObject) = clients.forEach { send(it, build(it)) }
 
     fun onSmsReceived(from: String, body: String, ts: Long) {
-        exec.execute { broadcast { Proto.msg("sms_in").put("from", from).put("body", body).put("ts", ts) } }
+        exec.execute {
+            broadcast { Proto.msg("sms_in").put("from", from).put("body", body).put("ts", ts) }
+            Apns.sms(this, from, body, connectedIds())
+        }
     }
 
     // ---------------------------------------------------------------- call state
 
+    private var lastState = Proto.STATE_IDLE
+
+    private fun connectedIds(): Set<String> = clients.map { it.id }.toSet()
+
     private fun onCallState(s: CallHub.Snapshot) {
+        if (s.state == Proto.STATE_RINGING && s.incoming && lastState != Proto.STATE_RINGING) {
+            Apns.ring(this, s.number, connectedIds())
+        }
+        lastState = s.state
         when (s.state) {
             Proto.STATE_ACTIVE -> if (session == null) owner?.let { startSession(it) }
             Proto.STATE_IDLE -> {

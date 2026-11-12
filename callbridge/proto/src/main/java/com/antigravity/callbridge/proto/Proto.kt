@@ -20,8 +20,9 @@ import javax.crypto.spec.SecretKeySpec
  *               gw->cl  {t:ok, mac=HMAC(key,"s",nonce,cnonce), token}
  *   cl->gw      dial{number} answer reject hangup dtmf{digit} calllog_get{limit}
  *               sms_get{limit} sms_send{id,to,body} ping
+ *               push_register{voip,alert,topic,sandbox}   (iPhone: APNs tokens, see gateway Apns.kt)
  *   gw->cl      call{state,number,incoming,bridged} calllog{items[]} sms{items[]}
- *               sms_in{from,body,ts} sms_sent{id,ok,error} error{msg} pong
+ *               sms_in{from,body,ts} sms_sent{id,ok,error} error{msg} pong push_status{ok,msg}
  *
  * Audio: UDP [AUDIO_PORT], packets of [token:int][seq:int][FRAME_SAMPLES x pcm16le], mono.
  */

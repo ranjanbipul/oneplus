@@ -1,7 +1,7 @@
 #!/bin/bash
-# Builds CallBridge.app (macOS companion client) into callbridge/macos/build/.
-#   ./build_app.sh            release build for this Mac's architecture
-#   ./build_app.sh --install  also copy it to /Applications
+# Builds CallBridge.app (macOS companion client) into callbridge/apple/build/.
+#   ./build_mac_app.sh            release build for this Mac's architecture
+#   ./build_mac_app.sh --install  also copy it to /Applications
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -18,7 +18,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key><string>com.antigravity.callbridge.mac</string>
+    <key>CFBundleIdentifier</key><string>com.imbine.callbridge.mac</string>
     <key>CFBundleName</key><string>CallBridge</string>
     <key>CFBundleDisplayName</key><string>CallBridge</string>
     <key>CFBundleExecutable</key><string>CallBridge</string>

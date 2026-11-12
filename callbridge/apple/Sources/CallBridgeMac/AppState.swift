@@ -1,30 +1,6 @@
+import CallBridgeCore
 import Foundation
 import Observation
-
-struct CallInfo: Equatable {
-    var state = Proto.idle
-    var number = ""
-    var incoming = false
-    /// True when this Mac is the device carrying the call's audio.
-    var bridged = false
-}
-
-struct LogItem: Identifiable, Hashable {
-    let id = UUID()
-    let number: String
-    let name: String
-    let type: String // in, out, missed, rejected, other
-    let ts: Int64
-    let dur: Int64
-}
-
-struct SmsItem: Identifiable, Hashable {
-    let id = UUID()
-    let addr: String
-    let body: String
-    let ts: Int64
-    let out: Bool
-}
 
 /// UI state. Only touched on the main thread.
 @Observable
@@ -52,6 +28,16 @@ final class AppState {
 /// Persistent settings.
 enum Config {
     private static let d = UserDefaults.standard
+
+    /// The app's bundle id changed from com.antigravity.callbridge.mac to
+    /// com.imbine.callbridge.mac; carry the old settings over once.
+    static func migrate() {
+        guard d.string(forKey: "clientId") == nil,
+              let old = UserDefaults(suiteName: "com.antigravity.callbridge.mac") else { return }
+        for k in ["key", "host", "keepAwake", "clientId"] {
+            if let v = old.object(forKey: k) { d.set(v, forKey: k) }
+        }
+    }
 
     static var key: String {
         get { d.string(forKey: "key") ?? "" }

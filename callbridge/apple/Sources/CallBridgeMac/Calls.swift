@@ -1,4 +1,6 @@
+import AVFoundation
 import AppKit
+import CallBridgeCore
 import Foundation
 import IOKit.pwr_mgt
 import UserNotifications
@@ -9,7 +11,7 @@ enum Calls {
     private static var s: AppState { AppState.shared }
 
     static func dial(_ raw: String) {
-        let number = raw.filter { $0.isNumber || "+*#".contains($0) }
+        let number = dialable(raw)
         guard !number.isEmpty else { return }
         guard s.connected else { s.notice = "Not connected to the gateway"; return }
         guard !s.inCall else { s.notice = "Line busy"; return }
@@ -47,7 +49,7 @@ enum Calls {
 
     static func toggleMute() {
         s.muted.toggle()
-        AudioEngine.shared.muted = s.muted
+        Link.audio.muted = s.muted
     }
 
     static func sendSms(to: String, body: String) {
@@ -66,23 +68,13 @@ enum Calls {
     static func onMessage(_ m: [String: Any]) {
         switch m["t"] as? String {
         case "call":
-            let new = CallInfo(
-                state: m["state"] as? String ?? Proto.idle,
-                number: m["number"] as? String ?? "",
-                incoming: m["incoming"] as? Bool ?? false,
-                bridged: m["bridged"] as? Bool ?? false
-            )
-            onCall(new)
+            onCall(CallInfo(message: m))
         case "calllog":
-            s.callLog = items(m).map {
-                LogItem(number: $0["number"] as? String ?? "", name: $0["name"] as? String ?? "",
-                        type: $0["type"] as? String ?? "other", ts: int64($0["ts"]), dur: int64($0["dur"]))
-            }
+            s.callLog = items(m).map { LogItem($0) }
         case "sms":
-            s.sms = items(m).map(smsItem)
+            s.sms = items(m).map { SmsItem($0) }
         case "sms_in":
-            let item = SmsItem(addr: m["from"] as? String ?? "", body: m["body"] as? String ?? "",
-                               ts: int64(m["ts"]), out: false)
+            let item = SmsItem(incoming: m)
             s.sms.insert(item, at: 0)
             Notify.sms(item)
         case "sms_sent":
@@ -110,8 +102,33 @@ enum Calls {
     /// The control link dropped: whatever call we knew about is gone from our point of view.
     static func onLinkDown() {
         s.connected = false
-        if s.status.hasPrefix("Connected") { s.status = "Disconnected, retrying…" }
         if s.inCall { onCall(CallInfo()) }
+    }
+
+    private static let micDenied = "Microphone access is off: allow CallBridge in System Settings > Privacy & Security > Microphone"
+
+    /// Starts call audio once microphone access is settled.
+    private static func startAudio() {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            guard let udp = Link.shared.udp, let ip = Link.shared.gatewayIP else { return }
+            Power.inCall(true)
+            Link.audio.start(udp: udp, ip: ip, token: Link.shared.token)
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                DispatchQueue.main.async {
+                    guard s.call.bridged, s.call.state == Proto.active else { return }
+                    if granted { startAudio() } else { s.notice = micDenied }
+                }
+            }
+        default:
+            s.notice = micDenied
+        }
+    }
+
+    private static func stopAudio() {
+        Link.audio.stop()
+        Power.inCall(false)
     }
 
     private static func onCall(_ new: CallInfo) {
@@ -135,17 +152,17 @@ enum Calls {
             Notify.clearIncoming()
             if new.bridged {
                 if old.state != Proto.active || s.callStarted == nil { s.callStarted = Date() }
-                AudioEngine.shared.muted = s.muted
-                AudioEngine.shared.start()
+                Link.audio.muted = s.muted
+                startAudio()
             } else {
                 // Answered on the phone itself or on another companion device.
-                AudioEngine.shared.stop()
+                stopAudio()
                 s.mine = false
             }
         default: // idle
             Ringer.stop()
             Notify.clearIncoming()
-            AudioEngine.shared.stop()
+            stopAudio()
             if old.state == Proto.ringing && old.incoming && !s.mine { Notify.missed(old.number) }
             s.mine = false
             s.muted = false
@@ -154,16 +171,6 @@ enum Calls {
         }
     }
 
-    private static func items(_ m: [String: Any]) -> [[String: Any]] {
-        m["items"] as? [[String: Any]] ?? []
-    }
-
-    private static func smsItem(_ o: [String: Any]) -> SmsItem {
-        SmsItem(addr: o["addr"] as? String ?? "", body: o["body"] as? String ?? "",
-                ts: int64(o["ts"]), out: o["out"] as? Bool ?? false)
-    }
-
-    private static func int64(_ v: Any?) -> Int64 { (v as? NSNumber)?.int64Value ?? 0 }
 }
 
 /// Plays the system ringtone in a loop while an incoming call rings.

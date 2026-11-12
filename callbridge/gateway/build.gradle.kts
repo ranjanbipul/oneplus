@@ -12,8 +12,8 @@ android {
         minSdk = 33
         // 33 on purpose: matches the OnePlus 8 (Android 13) and avoids API 34 foreground-service-type rules.
         targetSdk = 33
-        versionCode = 8
-        versionName = "0.2"
+        versionCode = 9
+        versionName = "0.3"
     }
 
     buildTypes {
@@ -39,4 +39,6 @@ android {
 
 dependencies {
     implementation(project(":proto"))
+    // HTTP/2 client for Apple push (APNs requires HTTP/2).
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

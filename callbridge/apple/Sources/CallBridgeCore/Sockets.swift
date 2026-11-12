@@ -1,9 +1,9 @@
 import Darwin
 import Foundation
 
-struct SocketError: Error, CustomStringConvertible {
-    let description: String
-    init(_ what: String, errno code: Int32 = errno) {
+public struct SocketError: Error, CustomStringConvertible {
+    public let description: String
+    public init(_ what: String, errno code: Int32 = errno) {
         description = code == 0 ? what : "\(what): \(String(cString: strerror(code)))"
     }
 }
@@ -23,7 +23,7 @@ private func setTimeout(_ fd: Int32, _ option: Int32, seconds: Double) {
 }
 
 /// Resolves a host name or literal to an IPv4 address string.
-func resolveIPv4(_ host: String) throws -> String {
+public func resolveIPv4(_ host: String) throws -> String {
     var hints = addrinfo()
     hints.ai_family = AF_INET
     hints.ai_socktype = SOCK_STREAM
@@ -37,34 +37,69 @@ func resolveIPv4(_ host: String) throws -> String {
     return String(cString: buf)
 }
 
-/// The IPv4 default-route gateway. When the Mac uses the OnePlus 8 as its hotspot or USB
-/// tether, this is the phone, which is where the gateway app listens.
-func defaultGatewayIPv4() -> String? {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/sbin/route")
-    p.arguments = ["-n", "get", "default"]
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = FileHandle.nullDevice
-    do { try p.run() } catch { return nil }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit()
-    for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
-        let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-        if parts.count == 2, parts[0] == "gateway", (try? makeAddr(parts[1], 0)) != nil { return parts[1] }
+/// The IPv4 default-route gateway, read from the kernel routing table (works on macOS and
+/// iOS). When the device uses the OnePlus 8 as its hotspot or tether, this is the phone,
+/// which is where the gateway app listens. Wi-Fi/Ethernet ("en") routes are preferred, so an
+/// iPhone whose primary route is cellular still finds the hotspot's gateway.
+public func defaultGatewayIPv4() -> String? {
+    // PF_ROUTE = 17, NET_RT_FLAGS = 2, RTF_GATEWAY = 0x2 (net/route.h is missing from the iOS SDK).
+    var mib: [Int32] = [CTL_NET, 17, 0, AF_INET, 2, 0x2]
+    var len = 0
+    guard sysctl(&mib, u_int(mib.count), nil, &len, nil, 0) == 0, len > 0 else { return nil }
+    var buf = [UInt8](repeating: 0, count: len)
+    guard sysctl(&mib, u_int(mib.count), &buf, &len, nil, 0) == 0 else { return nil }
+
+    // struct rt_msghdr (net/route.h, not in the iOS SDK): msglen u16 @0, index u16 @4,
+    // flags i32 @8, addrs i32 @12; 92 bytes in all. Addresses follow, each padded to 4 bytes.
+    let headerSize = 92
+    let rtfIfScope: Int32 = 0x1000000
+    struct Candidate { let ip: String; let wifi: Bool; let scoped: Bool }
+    var found = [Candidate]()
+    var off = 0
+    while off + headerSize <= len {
+        let msglen = Int(buf[off]) | Int(buf[off + 1]) << 8
+        guard msglen > 0, off + msglen <= len else { break }
+        defer { off += msglen }
+        func i32(_ at: Int) -> Int32 {
+            Int32(bitPattern: UInt32(buf[off + at]) | UInt32(buf[off + at + 1]) << 8 | UInt32(buf[off + at + 2]) << 16 | UInt32(buf[off + at + 3]) << 24)
+        }
+        let index = UInt32(buf[off + 4]) | UInt32(buf[off + 5]) << 8
+        let flags = i32(8)
+        let addrs = i32(12)
+        var p = off + headerSize
+        var dst: [UInt8]?
+        var gw: [UInt8]?
+        for bit in 0..<8 where addrs & (1 << bit) != 0 {
+            guard p < off + msglen else { break }
+            let saLen = Int(buf[p])
+            let family = buf[p + 1]
+            if family == UInt8(AF_INET), saLen >= 8 {
+                let ip = Array(buf[(p + 4)..<(p + 8)])
+                if bit == 0 { dst = ip } // RTA_DST
+                if bit == 1 { gw = ip }  // RTA_GATEWAY
+            } else if bit == 0 && saLen == 0 {
+                dst = [0, 0, 0, 0]
+            }
+            p += saLen > 0 ? (1 + ((saLen - 1) | 3)) : 4
+        }
+        guard dst == [0, 0, 0, 0], let g = gw, g != [0, 0, 0, 0] else { continue }
+        var name = [CChar](repeating: 0, count: Int(IF_NAMESIZE) + 1)
+        let ifname = if_indextoname(index, &name) != nil ? String(cString: name) : ""
+        found.append(Candidate(ip: g.map(String.init).joined(separator: "."), wifi: ifname.hasPrefix("en"), scoped: flags & rtfIfScope != 0))
     }
-    return nil
+    let best = found.first { $0.wifi && !$0.scoped } ?? found.first { $0.wifi } ?? found.first { !$0.scoped } ?? found.first
+    return best?.ip
 }
 
 /// Line-delimited JSON over a blocking TCP socket. Reads happen on one thread; sends are locked.
-final class Wire {
+public final class Wire {
     private let fd: Int32
     private var buf = [UInt8]()
     private var pos = 0
     private let sendLock = NSLock()
     private var closed = false
 
-    init(connectTo ip: String, port: UInt16, timeout: Double) throws {
+    public init(connectTo ip: String, port: UInt16, timeout: Double) throws {
         let s = socket(AF_INET, SOCK_STREAM, 0)
         guard s >= 0 else { throw SocketError("socket") }
         var one: Int32 = 1
@@ -91,10 +126,10 @@ final class Wire {
         fd = s
     }
 
-    func setReadTimeout(_ seconds: Double) { setTimeout(fd, SO_RCVTIMEO, seconds: seconds) }
+    public func setReadTimeout(_ seconds: Double) { setTimeout(fd, SO_RCVTIMEO, seconds: seconds) }
 
     /// Returns nil on end of stream; throws on error, timeout or oversized input.
-    func read() throws -> [String: Any]? {
+    public func read() throws -> [String: Any]? {
         var line = [UInt8]()
         while true {
             if pos == buf.count {
@@ -122,7 +157,7 @@ final class Wire {
         return dict
     }
 
-    func send(_ m: [String: Any]) throws {
+    public func send(_ m: [String: Any]) throws {
         var data = try JSONSerialization.data(withJSONObject: m)
         data.append(0x0A)
         sendLock.lock()
@@ -141,7 +176,7 @@ final class Wire {
     }
 
     /// Unblocks a pending read; safe to call from any thread.
-    func close() {
+    public func close() {
         sendLock.lock()
         defer { sendLock.unlock() }
         if closed { return }
@@ -152,11 +187,11 @@ final class Wire {
 }
 
 /// A UDP socket bound to an ephemeral local port, used for both directions of call audio.
-final class UdpSocket {
+public final class UdpSocket {
     let fd: Int32
-    let localPort: UInt16
+    public let localPort: UInt16
 
-    init() throws {
+    public init() throws {
         let s = socket(AF_INET, SOCK_DGRAM, 0)
         guard s >= 0 else { throw SocketError("udp socket") }
         var addr = sockaddr_in()
@@ -178,7 +213,7 @@ final class UdpSocket {
         setTimeout(fd, SO_RCVTIMEO, seconds: 0.5)
     }
 
-    func send(_ bytes: [UInt8], to ip: String, port: UInt16) {
+    public func send(_ bytes: [UInt8], to ip: String, port: UInt16) {
         guard var addr = try? makeAddr(ip, port) else { return }
         bytes.withUnsafeBytes { raw in
             _ = withUnsafePointer(to: &addr) {
@@ -190,11 +225,11 @@ final class UdpSocket {
     }
 
     /// Returns the datagram length, 0 on timeout, or -1 if the socket is closed.
-    func receive(into buf: inout [UInt8]) -> Int {
+    public func receive(into buf: inout [UInt8]) -> Int {
         let n = buf.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
         if n >= 0 { return n }
         return (errno == EAGAIN || errno == EINTR) ? 0 : -1
     }
 
-    func close() { Darwin.close(fd) }
+    public func close() { Darwin.close(fd) }
 }
