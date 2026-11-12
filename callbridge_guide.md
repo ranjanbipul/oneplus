@@ -1,10 +1,11 @@
-# CallBridge: use the OnePlus 8's SIM from another Android device
+# CallBridge: use the OnePlus 8's SIM from another Android device or a Mac
 
-CallBridge lets a second, unrooted Android device on the OnePlus 8's network make and receive
-calls through the OnePlus 8's SIM, with two-way audio, call log and SMS.
+CallBridge lets a second, unrooted Android device or a Mac on the OnePlus 8's network make and
+receive calls through the OnePlus 8's SIM, with two-way audio, call log and SMS.
 
 - **Gateway** (`callbridge/gateway`): privileged app on the rooted OnePlus 8, installed as a Magisk module.
 - **Client** (`callbridge/client`): normal APK for the second device.
+- **Mac client** (`callbridge/macos`): native SwiftUI app (macOS 14+, Intel or Apple silicon).
 - **Protocol** (`callbridge/proto`): TCP 8765 for control, UDP 8766 for audio (16 kHz mono PCM). LAN only.
 
 ## Install the gateway (OnePlus 8)
@@ -41,6 +42,38 @@ hotspot or Ethernet tether: the app connects to the network's router, which is t
 Recommended on the second device: exclude CallBridge from battery optimisation so incoming calls
 ring reliably, and open the app once after each reboot of that device.
 
+## Install the Mac client
+
+Needs Xcode (or the Command Line Tools) on the Mac:
+
+```bash
+callbridge/macos/build_app.sh --install
+```
+
+This builds `callbridge/macos/build/CallBridge.app` and copies it to `/Applications`. Open it,
+allow the microphone and notifications, then in **Settings** enter the pairing key and click
+**Save & Reconnect**. As on Android, leave the address empty when the Mac uses the OnePlus 8's
+hotspot or USB tether.
+
+- The app keeps running in the menu bar when its window is closed, so calls still ring. Incoming
+  calls ring, bring the window forward and post a notification with Answer and Decline buttons.
+- Audio uses the Mac's default input and output with Apple's voice processing (echo
+  cancellation and noise suppression), so the built-in speakers and microphone work without
+  headphones. Changing devices mid-call is handled.
+- **Keep Mac awake while connected** (on by default) stops idle sleep so calls can ring; the
+  Mac never idle-sleeps during a call. A closed lid still sleeps the Mac and drops the link.
+- The build is signed with your Apple Development identity when there is one, so macOS remembers
+  the microphone permission across rebuilds. With only an ad-hoc signature it asks again after
+  every build. Set `CODESIGN_IDENTITY` to choose another identity.
+
+## Several clients at once
+
+Any number of paired clients (Android and Mac) can be connected at the same time. All of them get
+call state, call log and SMS updates, and an incoming call rings on all of them. The client that
+answers or dials owns the call and is the only one that gets its audio; the others show the call
+as being on another device and can still hang it up. A call cannot be moved to another client
+while it is in progress. **New pairing key** in the gateway app unpairs every client.
+
 ## How call audio works on this phone
 
 Verified on IN2011, OxygenOS 13.1, Jio SIM in slot 2:
@@ -72,6 +105,7 @@ Verified on IN2011, OxygenOS 13.1, Jio SIM in slot 2:
 - One call at a time; a second (waiting) call is ignored.
 - If the client stays off the network for more than 20 seconds during a call it is on, the gateway hangs the call up.
 - Calls answered on the OnePlus 8 itself are not bridged.
+- A call stays on the client that answered or placed it; it cannot be handed to another client.
 
 ## Uninstall
 
