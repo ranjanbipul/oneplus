@@ -29,6 +29,11 @@ class HybridAudioBridge(context: Context) {
     private var prev = 0
     private var injectorStarted = 0L
 
+    /** How many times the injector has had to be restarted during this call. */
+    @Volatile
+    var restarts = 0
+        private set
+
     @Volatile
     private var stopped = false
     private val out = ByteBuffer.allocate(Proto.FRAME_SAMPLES * 3 * 4).order(ByteOrder.LITTLE_ENDIAN)
@@ -82,6 +87,7 @@ class HybridAudioBridge(context: Context) {
         // Do not spin if the injector cannot start at all (for example root was revoked).
         if (System.nanoTime() - injectorStarted < 300_000_000L) return true
         Log.w(TAG, "injector stopped ($why); restarting")
+        restarts++
         runCatching { sink?.close() }
         runCatching { proc?.destroy() }
         sink = null

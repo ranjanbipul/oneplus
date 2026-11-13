@@ -20,6 +20,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketAddress
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -399,6 +400,60 @@ class BridgeService : Service() {
         @Volatile
         private var live = true
 
+        // Per-direction counters, written by the audio threads and reported by statsLoop.
+        @Volatile private var dlRead = 0L   // frames read from the call
+        @Volatile private var dlSent = 0L   // packets sent to the client
+        @Volatile private var dlErr = 0L    // packet sends that failed
+        @Volatile private var ulRecv = 0L   // packets received from the client
+        @Volatile private var ulDrop = 0L   // client frames dropped because the queue was full
+        @Volatile private var ulPlay = 0L   // client frames written to the injector
+        @Volatile private var ulFill = 0L   // silence frames written because nothing was queued
+        private val dlGapMs = AtomicInteger()
+        private val ulGapMs = AtomicInteger()
+        private val dlPeak = AtomicInteger()
+        private val ulPeak = AtomicInteger()
+
+        private fun peak(pcm: ShortArray): Int {
+            var m = 0
+            for (v in pcm) {
+                val a = if (v < 0) -v else v.toInt()
+                if (a > m) m = a
+            }
+            return m
+        }
+
+        private fun max(a: AtomicInteger, v: Int) {
+            a.accumulateAndGet(v) { x, y -> if (x > y) x else y }
+        }
+
+        /**
+         * One line every [STATS_S] seconds while a call is bridged, so a one-way call can be
+         * diagnosed afterwards: frame counts per direction, the longest stall, and the loudest
+         * sample (0 means that direction carried only silence).
+         */
+        private fun statsLoop() {
+            var pRead = 0L; var pSent = 0L; var pErr = 0L
+            var pRecv = 0L; var pDrop = 0L; var pPlay = 0L; var pFill = 0L
+            var pInj = 0
+            while (live) {
+                runCatching { Thread.sleep(STATS_S * 1000L) }
+                val read = dlRead; val sent = dlSent; val err = dlErr
+                val recv = ulRecv; val drop = ulDrop; val play = ulPlay; val fill = ulFill
+                val inj = bridge.restarts
+                Log.i(
+                    TAG,
+                    "audio ${STATS_S}s: down read=${read - pRead} sent=${sent - pSent} err=${err - pErr}" +
+                        " gap=${dlGapMs.getAndSet(0)}ms peak=${dlPeak.getAndSet(0)}" +
+                        " | up recv=${recv - pRecv} play=${play - pPlay} silence=${fill - pFill}" +
+                        " drop=${drop - pDrop} gap=${ulGapMs.getAndSet(0)}ms peak=${ulPeak.getAndSet(0)}" +
+                        " inj=${inj - pInj}"
+                )
+                pRead = read; pSent = sent; pErr = err
+                pRecv = recv; pDrop = drop; pPlay = play; pFill = fill
+                pInj = inj
+            }
+        }
+
         fun start() {
             bridge.start()
             wakeLock?.acquire(4 * 60 * 60 * 1000L)
@@ -408,23 +463,40 @@ class BridgeService : Service() {
             }
             thread(name = "cb-downlink") { downlink() }
             thread(name = "cb-uplink") { uplink() }
+            thread(name = "cb-audio-stats", isDaemon = true) { statsLoop() }
             Log.i(TAG, "audio session started for ${client.name} (mute=$muteMode)")
         }
 
         fun offerUplink(frame: ShortArray) {
-            while (!queue.offer(frame)) queue.poll() // drop oldest when the client runs ahead
+            ulRecv++
+            while (!queue.offer(frame)) { // drop oldest when the client runs ahead
+                queue.poll()
+                ulDrop++
+            }
         }
 
         private fun downlink() {
             val pcm = ShortArray(Proto.FRAME_SAMPLES)
             val out = ByteArray(Proto.AUDIO_PACKET)
             var seq = 0
+            var last = System.nanoTime()
             while (live) {
                 // AudioRecord.read in blocking mode fills the whole frame or reports an error.
-                if (bridge.readDownlink(pcm, pcm.size) != pcm.size) return
+                val n = bridge.readDownlink(pcm, pcm.size)
+                if (n != pcm.size) {
+                    if (live) Log.w(TAG, "downlink ended: call audio read returned $n")
+                    return
+                }
+                val now = System.nanoTime()
+                max(dlGapMs, ((now - last) / 1_000_000).toInt())
+                last = now
+                dlRead++
+                max(dlPeak, peak(pcm))
                 Proto.packAudio(out, client.token, seq++, pcm)
                 val dest = client.udp ?: InetSocketAddress(client.addr, client.uport)
-                runCatching { udp?.send(DatagramPacket(out, out.size, dest)) }
+                val sock = udp
+                if (sock != null && runCatching { sock.send(DatagramPacket(out, out.size, dest)) }.isSuccess) dlSent++
+                else dlErr++
             }
         }
 
@@ -433,9 +505,21 @@ class BridgeService : Service() {
             val silence = ShortArray(Proto.FRAME_SAMPLES)
             val frameNs = 20_000_000L
             var next = System.nanoTime()
+            var last = next
             while (live) {
-                val frame = queue.poll() ?: silence
-                if (!bridge.writeUplink(frame, Proto.FRAME_SAMPLES)) return
+                val queued = queue.poll()
+                val frame = queued ?: silence
+                if (!bridge.writeUplink(frame, Proto.FRAME_SAMPLES)) {
+                    if (live) Log.w(TAG, "uplink ended: injector could not be restarted")
+                    return
+                }
+                val now = System.nanoTime()
+                max(ulGapMs, ((now - last) / 1_000_000).toInt())
+                last = now
+                if (queued != null) {
+                    ulPlay++
+                    max(ulPeak, peak(queued))
+                } else ulFill++
                 next += frameNs
                 val wait = next - System.nanoTime()
                 if (wait > 0) Thread.sleep(wait / 1_000_000, (wait % 1_000_000).toInt())
@@ -451,13 +535,18 @@ class BridgeService : Service() {
                 Prefs.MUTE_DEVICE -> HybridAudioBridge.rootDeviceMute(false)
             }
             runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
-            Log.i(TAG, "audio session stopped")
+            Log.i(
+                TAG,
+                "audio session stopped: down read=$dlRead sent=$dlSent err=$dlErr" +
+                    " | up recv=$ulRecv play=$ulPlay silence=$ulFill drop=$ulDrop inj=${bridge.restarts}"
+            )
         }
     }
 
     companion object {
         private const val TAG = "CallBridgeGateway"
         private const val ORPHAN_GRACE_S = 20L
+        private const val STATS_S = 5
 
         @Volatile
         var instance: BridgeService? = null
