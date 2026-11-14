@@ -7,6 +7,7 @@ CONF="$DIR/smart_charge.conf"
 LOG_FILE="$DIR/smart_charge.log"
 PID_FILE="$DIR/smart_charge.pid"
 
+NODE_MMI="/sys/class/oplus_chg/battery/mmi_charging_enable"
 NODE_SUSPEND="/sys/class/power_supply/battery/input_suspend"
 NODE_CAPACITY="/sys/class/power_supply/battery/capacity"
 NODE_USB_ONLINE="/sys/class/power_supply/usb/online"
@@ -14,13 +15,31 @@ NODE_TEMP="/sys/class/power_supply/battery/temp"
 NODE_VOLTAGE="/sys/class/power_supply/battery/voltage_now"
 NODE_CURRENT="/sys/class/power_supply/battery/current_now"
 
+# Same switch as smart_charge.sh: OnePlus's node when present, input_suspend otherwise.
+charging_off() {
+    if [ -w "$NODE_MMI" ]; then
+        [ "$(cat "$NODE_MMI" 2>/dev/null)" = "0" ] && echo 1 || echo 0
+    else
+        cat "$NODE_SUSPEND" 2>/dev/null || echo 0
+    fi
+}
+
+set_charging() {
+    if [ -w "$NODE_MMI" ]; then
+        [ "$1" = "on" ] && echo 1 > "$NODE_MMI" || echo 0 > "$NODE_MMI"
+        [ "$(cat "$NODE_SUSPEND" 2>/dev/null)" = "1" ] && echo 0 > "$NODE_SUSPEND"
+    else
+        [ "$1" = "on" ] && echo 0 > "$NODE_SUSPEND" || echo 1 > "$NODE_SUSPEND"
+    fi
+}
+
 cmd="$1"
 
 case "$cmd" in
     status|"")
         cap=$(cat "$NODE_CAPACITY" 2>/dev/null || echo "N/A")
         usb=$(cat "$NODE_USB_ONLINE" 2>/dev/null || echo "0")
-        suspend=$(cat "$NODE_SUSPEND" 2>/dev/null || echo "0")
+        suspend=$(charging_off)
         raw_temp=$(cat "$NODE_TEMP" 2>/dev/null || echo "0")
         temp_c=$(awk "BEGIN {printf \"%.1f\", $raw_temp / 10}")
         raw_volt=$(cat "$NODE_VOLTAGE" 2>/dev/null || echo "0")
@@ -49,7 +68,7 @@ case "$cmd" in
         fi
 
         if [ "$suspend" = "1" ]; then
-            echo "  Charging State  : SUSPENDED (Idle / Disconnecting from battery)"
+            echo "  Charging State  : SUSPENDED (running from the charger, battery idle)"
         else
             echo "  Charging State  : ACTIVE (Charging allowed)"
         fi
@@ -64,13 +83,13 @@ case "$cmd" in
         ;;
 
     on|start)
-        echo 0 > "$NODE_SUSPEND"
-        echo "Charging FORCED ON (input_suspend=0)."
+        set_charging on
+        echo "Charging FORCED ON."
         ;;
 
     off|stop)
-        echo 1 > "$NODE_SUSPEND"
-        echo "Charging FORCED OFF (input_suspend=1)."
+        set_charging off
+        echo "Charging FORCED OFF."
         ;;
 
     limits)
@@ -98,7 +117,7 @@ case "$cmd" in
         echo "Usage: chargectl [status|on|off|limits|log]"
         echo "  status         Show detailed battery and charging state"
         echo "  on             Force charging ON immediately"
-        echo "  off            Force charging OFF (suspend input)"
+        echo "  off            Force charging OFF"
         echo "  limits <s <e>  Change thresholds (e.g. chargectl limits 50 85)"
         echo "  log            View recent activity log"
         ;;
